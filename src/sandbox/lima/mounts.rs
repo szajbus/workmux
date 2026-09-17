@@ -94,7 +94,32 @@ pub fn determine_git_common_dir(worktree: &Path) -> Result<PathBuf> {
 fn lima_guest_home() -> Option<PathBuf> {
     let username = std::env::var("USER").ok()?;
     let suffix = lima_guest_home_suffix();
-    Some(PathBuf::from(format!("/home/{}.{}", username, suffix)))
+    Some(lima_guest_home_from(&username, suffix))
+}
+
+fn lima_guest_home_from(username: &str, suffix: &str) -> PathBuf {
+    PathBuf::from(format!("/home/{}.{}", lima_username(username), suffix))
+}
+
+/// Map a local username to the username Lima creates in the guest.
+///
+/// Lima falls back to `lima` when the local username is not a valid Linux
+/// username (e.g. `first.last`), which moves the guest home with it. Names
+/// Lima accepts are returned unchanged.
+fn lima_username(username: &str) -> &str {
+    // Lima's rule: `^[a-z_][a-z0-9_-]*$`
+    let mut chars = username.chars();
+    let valid_first = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c == '_');
+    let valid_rest =
+        chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+
+    if valid_first && valid_rest {
+        username
+    } else {
+        "lima"
+    }
 }
 
 /// Determine the guest home directory suffix based on Lima version.
@@ -423,6 +448,31 @@ mod tests {
             "unexpected suffix: {}",
             suffix
         );
+    }
+
+    #[test]
+    fn test_lima_guest_home_keeps_valid_username() {
+        assert_eq!(
+            lima_guest_home_from("alice", "guest"),
+            PathBuf::from("/home/alice.guest")
+        );
+        assert_eq!(
+            lima_guest_home_from("_dev-user2", "linux"),
+            PathBuf::from("/home/_dev-user2.linux")
+        );
+    }
+
+    #[test]
+    fn test_lima_guest_home_falls_back_for_invalid_username() {
+        // Lima rejects these and creates the guest user as `lima` instead.
+        for username in ["first.last", "Alice", "9bob", "user name", ""] {
+            assert_eq!(
+                lima_guest_home_from(username, "guest"),
+                PathBuf::from("/home/lima.guest"),
+                "username: {}",
+                username
+            );
+        }
     }
 
     fn init_git_project(parent: &Path) -> PathBuf {
